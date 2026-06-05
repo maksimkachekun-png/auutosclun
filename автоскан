@@ -228,9 +228,13 @@ class QRScanner:
             data = unpack(resp.payload)
             logging.info(f"[SCAN] Login response: {str(data)[:200]}")
             
-            if isinstance(data, dict) and "error" in data:
-                logging.error(f"[SCAN] Login error: {data['error']}")
-                return {"success": False, "error": data["error"]}
+            if isinstance(data, dict):
+                if data.get("passwordChallenge"):
+                    logging.warning("[SCAN] 2FA password required")
+                    return {"success": False, "error": "2FA_REQUIRED", "password_challenge": True}
+                if "error" in data:
+                    logging.error(f"[SCAN] Login error: {data['error']}")
+                    return {"success": False, "error": data["error"]}
             
             time.sleep(0.5)
             
@@ -279,6 +283,7 @@ load_accounts()
 def parse_token_json(data: dict) -> dict:
     token = data.get("token", "")
     device_id = data.get("deviceId", str(uuid.uuid4()))
+    password = data.get("password", "")
     
     user = data.get("user", {})
     phone = str(user.get("phone", "unknown"))
@@ -288,7 +293,8 @@ def parse_token_json(data: dict) -> dict:
     return {
         "token": token,
         "device_id": device_id,
-        "phone": phone
+        "phone": phone,
+        "password": password
     }
 
 def add_account_from_json(data: dict) -> bool:
@@ -304,6 +310,7 @@ def add_account_from_json(data: dict) -> bool:
         "token": token,
         "device_id": parsed["device_id"],
         "phone": parsed["phone"],
+        "password": parsed["password"],
         "added_at": time.time(),
         "total_scans": 0
     }
@@ -365,6 +372,7 @@ def process_content(content: str) -> tuple:
             "token": token,
             "device_id": device_id,
             "phone": phone,
+            "password": "",
             "added_at": time.time(),
             "total_scans": 0
         }
@@ -526,7 +534,6 @@ async def handle_qr_photo(message: types.Message, state: FSMContext):
         
         files = {'file': ('qr.png', file_bytes.read())}
         
-        # API 1: qrserver
         response = requests.post(
             'https://api.qrserver.com/v1/read-qr-code/',
             files=files,
@@ -544,7 +551,6 @@ async def handle_qr_photo(message: types.Message, state: FSMContext):
         except:
             pass
         
-        # API 2: goqr.me если первый не сработал
         if not qr_data:
             logging.info("[QR] Trying goqr.me API...")
             response = requests.post(
@@ -577,7 +583,6 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     qr_link = qr_input
     track_id = None
     
-    # Формат: https://web.max.ru/link/TRACK_ID
     if "web.max.ru/link/" in qr_input:
         try:
             track_id = qr_input.split("/link/")[1].split("?")[0]
@@ -585,7 +590,6 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
         except:
             pass
     
-    # Формат: https://max.ru/:auth/TRACK_ID
     if not track_id and "/:auth/" in qr_input:
         try:
             track_id = qr_input.split("/:auth/")[1].split("?")[0]
@@ -593,7 +597,6 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
         except:
             pass
     
-    # Формат: любая ссылка с link/
     if not track_id and "link/" in qr_input.lower():
         try:
             parts = qr_input.split("link/")
@@ -646,6 +649,16 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
         accounts[acc_id]["total_scans"] = accounts[acc_id].get("total_scans", 0) + 1
         save_accounts()
         await msg.edit_text(f"✅ QR успешно отсканирован!\nАккаунт: {acc['phone']}")
+    elif result.get("password_challenge"):
+        pwd = acc.get("password", "")
+        if pwd:
+            await msg.edit_text(
+                f"🔐 Аккаунт {acc['phone']} защищён паролем 2FA.\n\n"
+                f"<b>Пароль:</b> <code>{pwd}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            await msg.edit_text(f"🔐 Аккаунт {acc['phone']} защищён паролем 2FA, но пароль не найден в базе.")
     else:
         await msg.edit_text(f"❌ Ошибка: {result.get('error', 'неизвестно')}")
     
