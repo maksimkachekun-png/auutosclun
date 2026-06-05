@@ -21,8 +21,8 @@ from aiogram.types import InlineKeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = "ТОКЕН_БОТА_СКАНЕРА"
-ADMIN_ID = 123456789
+BOT_TOKEN = "8712834290:AAGv0YdVn9F4EDwlwQfeuyPoP9d26G3_CsU"
+ADMIN_ID = 8632861931
 ACCOUNTS_FILE = "scanner_accounts.json"
 
 bot = Bot(token=BOT_TOKEN)
