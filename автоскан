@@ -1,3 +1,37 @@
+import subprocess
+import sys
+import platform
+
+# Авто-установка зависимостей
+def install_dependencies():
+    deps = {
+        'PIL': 'Pillow',
+        'pyzbar': 'pyzbar',
+    }
+    
+    for module, package in deps.items():
+        try:
+            __import__(module)
+        except ImportError:
+            print(f"Устанавливаю {package}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    
+    # Установка системной библиотеки zbar для Linux
+    if platform.system() == "Linux":
+        try:
+            import ctypes
+            ctypes.cdll.LoadLibrary("libzbar.so.0")
+        except:
+            print("Устанавливаю системную библиотеку zbar...")
+            try:
+                subprocess.run(["sudo", "apt-get", "update", "-qq"], capture_output=True)
+                subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "libzbar0"], capture_output=True)
+                print("Системная библиотека zbar установлена")
+            except:
+                print("Не удалось автоматически установить libzbar0. Установите вручную: sudo apt-get install libzbar0")
+
+install_dependencies()
+
 import os
 import json
 import asyncio
@@ -247,7 +281,6 @@ def save_accounts():
 load_accounts()
 
 def parse_token_json(data: dict) -> dict:
-    """Извлекает token, device_id и phone из JSON формата выгрузки"""
     token = data.get("token", "")
     device_id = data.get("deviceId", str(uuid.uuid4()))
     
@@ -263,7 +296,6 @@ def parse_token_json(data: dict) -> dict:
     }
 
 def add_account_from_json(data: dict) -> bool:
-    """Добавляет аккаунт из JSON данных. Возвращает True если успешно."""
     parsed = parse_token_json(data)
     token = parsed["token"]
     
@@ -281,7 +313,6 @@ def add_account_from_json(data: dict) -> bool:
     return True
 
 def process_content(content: str) -> tuple:
-    """Обрабатывает содержимое файла. Возвращает (added, skipped)"""
     added = 0
     skipped = 0
     
@@ -352,6 +383,7 @@ def main_keyboard():
 def admin_keyboard():
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📷 Отсканировать QR", callback_data="scan_qr"))
+    builder.row(InlineKeyboardButton(text="➕ Загрузить токены", callback_data="upload_tokens"))
     builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data="stats"))
     return builder.as_markup()
 
@@ -370,6 +402,22 @@ async def start(message: types.Message):
     )
 
 # ==================== ЗАГРУЗКА ФАЙЛОВ С ТОКЕНАМИ ====================
+
+@dp.callback_query(F.data == "upload_tokens")
+async def cb_upload_tokens(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return await callback.answer("❌ Только для админа", show_alert=True)
+    
+    await callback.message.answer(
+        "📦 Отправьте файл с токенами:\n\n"
+        "Поддерживаемые форматы:\n"
+        "• <b>.json</b> — одиночный токен или массив\n"
+        "• <b>.txt</b> — токены построчно\n"
+        "• <b>.zip</b> — архив с .txt/.json файлами\n\n"
+        "Формат данных как при выгрузке ANDROID из основного бота.",
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 @dp.message(F.document)
 async def handle_document(message: types.Message):
@@ -466,7 +514,6 @@ async def cb_scan_qr(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AuthState.waiting_for_qr, F.photo)
 async def handle_qr_photo(message: types.Message, state: FSMContext):
-    """Обрабатывает фото с QR-кодом"""
     msg = await message.answer("⏳ Распознаю QR-код...")
     
     try:
@@ -498,12 +545,10 @@ async def handle_qr_photo(message: types.Message, state: FSMContext):
 
 @dp.message(AuthState.waiting_for_qr, F.text)
 async def handle_qr_text(message: types.Message, state: FSMContext):
-    """Обрабатывает текстовую ссылку"""
     msg = await message.answer("⏳ Обрабатываю ссылку...")
     await process_qr(message, state, message.text.strip(), msg)
 
 async def process_qr(message: types.Message, state: FSMContext, qr_input: str, msg):
-    """Общая логика сканирования QR"""
     qr_link = qr_input
     track_id = None
     
