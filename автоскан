@@ -620,11 +620,6 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     acc_id = acc_ids[0]
     acc = accounts[acc_id]
     
-    acc_copy = dict(accounts[acc_id])
-    del accounts[acc_id]
-    accounts[acc_id] = acc_copy
-    save_accounts()
-    
     await msg.edit_text(f"⏳ Сканирую QR через {acc['phone']}...")
     logging.info(f"[QR] Using account: {acc['phone']}")
     
@@ -646,9 +641,24 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     if result is None:
         await msg.edit_text("❌ Таймаут сканирования")
     elif result.get("success"):
-        accounts[acc_id]["total_scans"] = accounts[acc_id].get("total_scans", 0) + 1
+        pwd = acc.get("password", "")
+        if pwd:
+            text = (
+                f"✅ QR-code успешно отсканирован!\n\n"
+                f"🔐 На аккаунте установлен пароль.\n"
+                f"<b>Пароль от аккаунта:</b> <code>{pwd}</code>"
+            )
+        else:
+            text = (
+                f"✅ QR-code успешно отсканирован!\n\n"
+                f"🔓 Пароль на аккаунте отсутствует."
+            )
+        
+        # Удаляем аккаунт после использования
+        del accounts[acc_id]
         save_accounts()
-        await msg.edit_text(f"✅ QR успешно отсканирован!\nАккаунт: {acc['phone']}")
+        
+        await msg.edit_text(text, parse_mode="HTML")
     elif result.get("password_challenge"):
         pwd = acc.get("password", "")
         if pwd:
@@ -659,6 +669,10 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
             )
         else:
             await msg.edit_text(f"🔐 Аккаунт {acc['phone']} защищён паролем 2FA, но пароль не найден в базе.")
+        
+        # Удаляем аккаунт
+        del accounts[acc_id]
+        save_accounts()
     else:
         await msg.edit_text(f"❌ Ошибка: {result.get('error', 'неизвестно')}")
     
