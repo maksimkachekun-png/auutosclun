@@ -563,13 +563,24 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     qr_link = qr_input
     track_id = None
     
+    # Формат: https://web.max.ru/link/TRACK_ID
     if "web.max.ru/link/" in qr_input:
         try:
             track_id = qr_input.split("/link/")[1].split("?")[0]
             logging.info(f"[QR] Extracted track_id from web.max.ru: {track_id}")
         except:
             pass
-    elif "link/" in qr_input.lower():
+    
+    # Формат: https://max.ru/:auth/TRACK_ID
+    if not track_id and "/:auth/" in qr_input:
+        try:
+            track_id = qr_input.split("/:auth/")[1].split("?")[0]
+            logging.info(f"[QR] Extracted track_id from :auth: {track_id}")
+        except:
+            pass
+    
+    # Формат: любая ссылка с link/
+    if not track_id and "link/" in qr_input.lower():
         try:
             parts = qr_input.split("link/")
             if len(parts) > 1:
