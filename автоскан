@@ -1,37 +1,3 @@
-import subprocess
-import sys
-import platform
-
-# Авто-установка зависимостей
-def install_dependencies():
-    deps = {
-        'PIL': 'Pillow',
-        'pyzbar': 'pyzbar',
-    }
-    
-    for module, package in deps.items():
-        try:
-            __import__(module)
-        except ImportError:
-            print(f"Устанавливаю {package}...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-    
-    # Установка системной библиотеки zbar для Linux
-    if platform.system() == "Linux":
-        try:
-            import ctypes
-            ctypes.cdll.LoadLibrary("libzbar.so.0")
-        except:
-            print("Устанавливаю системную библиотеку zbar...")
-            try:
-                subprocess.run(["sudo", "apt-get", "update", "-qq"], capture_output=True)
-                subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "libzbar0"], capture_output=True)
-                print("Системная библиотека zbar установлена")
-            except:
-                print("Не удалось автоматически установить libzbar0. Установите вручную: sudo apt-get install libzbar0")
-
-install_dependencies()
-
 import os
 import json
 import asyncio
@@ -44,6 +10,7 @@ import socket
 import struct
 import msgpack
 import zipfile
+import requests
 from io import BytesIO
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.context import FSMContext
@@ -54,8 +21,8 @@ from aiogram.types import InlineKeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = "8712834290:AAGv0YdVn9F4EDwlwQfeuyPoP9d26G3_CsU"
-ADMIN_ID = 8632861931
+BOT_TOKEN = "ТОКЕН_БОТА_СКАНЕРА"
+ADMIN_ID = 123456789
 ACCOUNTS_FILE = "scanner_accounts.json"
 
 bot = Bot(token=BOT_TOKEN)
@@ -395,7 +362,7 @@ async def start(message: types.Message):
     kb = admin_keyboard() if is_admin else main_keyboard()
     await message.answer(
         "🤖 <b>QR Scanner Bot</b>\n\n"
-        "Отправьте <b>фото QR-кода</b> или ссылку и бот отсканирует его через свободный аккаунт.\n\n"
+        "Отправьте <b>фото QR-кода</b> и бот отсканирует его через свободный аккаунт.\n\n"
         "<b>Для админа:</b> отправьте .txt, .json или .zip файл с токенами.",
         parse_mode="HTML",
         reply_markup=kb
@@ -506,7 +473,7 @@ async def cb_scan_qr(callback: types.CallbackQuery, state: FSMContext):
     
     await state.set_state(AuthState.waiting_for_qr)
     await callback.message.answer(
-        "📷 Отправьте <b>фотографию QR-кода</b> или ссылку.\n\n"
+        "📷 Отправьте <b>фотографию QR-кода</b>.\n\n"
         "Бот распознает QR и отсканирует его.",
         parse_mode="HTML"
     )
@@ -517,36 +484,28 @@ async def handle_qr_photo(message: types.Message, state: FSMContext):
     msg = await message.answer("⏳ Распознаю QR-код...")
     
     try:
-        from PIL import Image
-        from pyzbar.pyzbar import decode
-        
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
-        file_bytes = await bot.download_file(file.file_path)
+        file_path = file.file_path
         
-        image = Image.open(BytesIO(file_bytes.read()))
-        decoded = decode(image)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
         
-        if not decoded:
-            await msg.edit_text("❌ QR-код не найден на фото. Попробуйте ещё раз или отправьте ссылку текстом.")
-            return
+        api_url = f"https://api.qrserver.com/v1/read-qr-code/?fileurl={file_url}"
+        response = requests.get(api_url)
+        data = response.json()
         
-        qr_data = decoded[0].data.decode('utf-8')
-        await process_qr(message, state, qr_data, msg)
+        if data and isinstance(data, list) and len(data) > 0:
+            symbol = data[0].get("symbol", [])
+            if symbol and len(symbol) > 0:
+                qr_data = symbol[0].get("data", "")
+                if qr_data:
+                    await process_qr(message, state, qr_data, msg)
+                    return
         
-    except ImportError:
-        await msg.edit_text(
-            "❌ Модуль распознавания QR не установлен.\n"
-            "Отправьте ссылку текстом: <code>https://web.max.ru/link/...</code>",
-            parse_mode="HTML"
-        )
+        await msg.edit_text("❌ QR-код не найден на фото. Попробуйте другое фото.")
+        
     except Exception as e:
-        await msg.edit_text(f"❌ Ошибка распознавания: {e}\n\nПопробуйте отправить ссылку текстом.")
-
-@dp.message(AuthState.waiting_for_qr, F.text)
-async def handle_qr_text(message: types.Message, state: FSMContext):
-    msg = await message.answer("⏳ Обрабатываю ссылку...")
-    await process_qr(message, state, message.text.strip(), msg)
+        await msg.edit_text(f"❌ Ошибка распознавания: {e}")
 
 async def process_qr(message: types.Message, state: FSMContext, qr_input: str, msg):
     qr_link = qr_input
@@ -559,7 +518,7 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
             pass
     
     if not track_id:
-        await msg.edit_text("❌ Не удалось извлечь ID из QR. Отправьте корректный QR-код или ссылку.")
+        await msg.edit_text("❌ Не удалось извлечь ID из QR. Отправьте корректный QR-код.")
         return
     
     acc_ids = list(accounts.keys())
