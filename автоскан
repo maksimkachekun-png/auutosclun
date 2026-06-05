@@ -486,12 +486,14 @@ async def handle_qr_photo(message: types.Message, state: FSMContext):
     try:
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
-        file_path = file.file_path
+        file_bytes = await bot.download_file(file.file_path)
         
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-        
-        api_url = f"https://api.qrserver.com/v1/read-qr-code/?fileurl={file_url}"
-        response = requests.get(api_url)
+        # Отправляем файл напрямую в Google QR API
+        files = {'file': ('qr.png', file_bytes.read())}
+        response = requests.post(
+            'https://api.qrserver.com/v1/read-qr-code/',
+            files=files
+        )
         data = response.json()
         
         if data and isinstance(data, list) and len(data) > 0:
