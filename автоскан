@@ -509,27 +509,50 @@ async def handle_qr_photo(message: types.Message, state: FSMContext):
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
         file_bytes = await bot.download_file(file.file_path)
-        logging.info(f"[QR] Photo downloaded, size: {len(file_bytes.read())} bytes")
         
         files = {'file': ('qr.png', file_bytes.read())}
+        
+        # API 1: qrserver
         response = requests.post(
             'https://api.qrserver.com/v1/read-qr-code/',
-            files=files
+            files=files,
+            timeout=10
         )
-        data = response.json()
-        logging.info(f"[QR] API response: {data}")
         
-        if data and isinstance(data, list) and len(data) > 0:
-            symbol = data[0].get("symbol", [])
-            if symbol and len(symbol) > 0:
-                qr_data = symbol[0].get("data", "")
-                logging.info(f"[QR] Decoded data: {qr_data}")
-                if qr_data:
-                    await process_qr(message, state, qr_data, msg)
-                    return
+        qr_data = None
+        try:
+            data = response.json()
+            logging.info(f"[QR] API response: {data}")
+            if data and isinstance(data, list) and len(data) > 0:
+                symbol = data[0].get("symbol", [])
+                if symbol and len(symbol) > 0:
+                    qr_data = symbol[0].get("data", "")
+        except:
+            pass
         
-        logging.warning("[QR] No QR code found in photo")
-        await msg.edit_text("❌ QR-код не найден на фото. Попробуйте другое фото.")
+        # API 2: goqr.me если первый не сработал
+        if not qr_data:
+            logging.info("[QR] Trying goqr.me API...")
+            response = requests.post(
+                'https://api.goqr.me/read-qr-code/',
+                files=files,
+                timeout=10
+            )
+            try:
+                data = response.json()
+                logging.info(f"[QR] goqr response: {data}")
+                if data and isinstance(data, list) and len(data) > 0:
+                    qr_data = data[0].get("data", "")
+            except:
+                pass
+        
+        if qr_data:
+            logging.info(f"[QR] Decoded data: {qr_data}")
+            await process_qr(message, state, qr_data, msg)
+            return
+        
+        logging.warning("[QR] Both APIs failed")
+        await msg.edit_text("❌ QR-код не найден на фото. Попробуйте другое фото с чётким QR-кодом.")
         
     except Exception as e:
         logging.error(f"[QR] Error: {e}")
@@ -540,7 +563,6 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     qr_link = qr_input
     track_id = None
     
-    # Пробуем разные форматы ссылок
     if "web.max.ru/link/" in qr_input:
         try:
             track_id = qr_input.split("/link/")[1].split("?")[0]
