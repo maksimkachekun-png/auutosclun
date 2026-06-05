@@ -98,8 +98,10 @@ class MaxConnection:
             self._pending.clear()
             self._responses.clear()
             threading.Thread(target=self._reader, daemon=True).start()
+            logging.info("[CONN] Connected to api.oneme.ru")
             return True
-        except:
+        except Exception as e:
+            logging.error(f"[CONN] Connection failed: {e}")
             return False
 
     def close(self):
@@ -108,6 +110,7 @@ class MaxConnection:
             try: self._sock.close()
             except: pass
             self._sock = None
+        logging.info("[CONN] Connection closed")
 
     def _reader(self):
         while self._running and self._sock:
@@ -159,8 +162,10 @@ class QRScanner:
         self.conn = MaxConnection()
 
     def scan(self, track_id: str, qr_link: str) -> dict:
+        logging.info(f"[SCAN] Starting scan: track_id={track_id}")
         try:
             if not self.conn.connect():
+                logging.error("[SCAN] Connection failed")
                 return {"success": False, "error": "Connection failed"}
             
             now_ms = int(time.time() * 1000)
@@ -185,6 +190,7 @@ class QRScanner:
             p = Packet(Opcode.SESSION_INIT, pack(payload))
             self.conn.send(p)
             time.sleep(0.5)
+            logging.info("[SCAN] Session initialized")
             
             login_payload = {
                 "token": self.token,
@@ -206,8 +212,10 @@ class QRScanner:
             p = Packet(Opcode.LOGIN, pack(login_payload))
             resp = self.conn.send(p)
             data = unpack(resp.payload)
+            logging.info(f"[SCAN] Login response: {str(data)[:200]}")
             
             if isinstance(data, dict) and "error" in data:
+                logging.error(f"[SCAN] Login error: {data['error']}")
                 return {"success": False, "error": data["error"]}
             
             time.sleep(0.5)
@@ -215,15 +223,20 @@ class QRScanner:
             qr_payload = {"trackId": track_id, "qrLink": qr_link}
             p = Packet(Opcode.AUTH_QR_APPROVE, pack(qr_payload))
             resp = self.conn.send(p)
+            logging.info(f"[SCAN] QR approve sent")
             
             if resp.payload and len(resp.payload) > 0:
                 data = unpack(resp.payload)
+                logging.info(f"[SCAN] QR approve response: {str(data)[:200]}")
                 if isinstance(data, dict) and "error" in data:
+                    logging.error(f"[SCAN] QR error: {data['error']}")
                     return {"success": False, "error": data["error"]}
             
+            logging.info("[SCAN] Success!")
             return {"success": True}
             
         except Exception as e:
+            logging.error(f"[SCAN] Exception: {e}")
             return {"success": False, "error": str(e)}
         finally:
             self.conn.close()
@@ -240,10 +253,12 @@ def load_accounts():
     if os.path.exists(ACCOUNTS_FILE):
         with open(ACCOUNTS_FILE, "r") as f:
             accounts = json.load(f)
+        logging.info(f"[DATA] Loaded {len(accounts)} accounts")
 
 def save_accounts():
     with open(ACCOUNTS_FILE, "w") as f:
         json.dump(accounts, f, ensure_ascii=False, indent=4)
+    logging.info(f"[DATA] Saved {len(accounts)} accounts")
 
 load_accounts()
 
@@ -267,6 +282,7 @@ def add_account_from_json(data: dict) -> bool:
     token = parsed["token"]
     
     if not token or len(token) < 20:
+        logging.warning(f"[DATA] Skipped invalid token: {str(data)[:100]}")
         return False
     
     acc_id = str(uuid.uuid4())[:8]
@@ -277,6 +293,7 @@ def add_account_from_json(data: dict) -> bool:
         "added_at": time.time(),
         "total_scans": 0
     }
+    logging.info(f"[DATA] Added account: {parsed['phone']} (id={acc_id})")
     return True
 
 def process_content(content: str) -> tuple:
@@ -360,6 +377,7 @@ def admin_keyboard():
 async def start(message: types.Message):
     is_admin = message.from_user.id == ADMIN_ID
     kb = admin_keyboard() if is_admin else main_keyboard()
+    logging.info(f"[USER] /start from {message.from_user.id} (admin={is_admin})")
     await message.answer(
         "🤖 <b>QR Scanner Bot</b>\n\n"
         "Отправьте <b>фото QR-кода</b> и бот отсканирует его через свободный аккаунт.\n\n"
@@ -393,6 +411,7 @@ async def handle_document(message: types.Message):
     
     doc = message.document
     file_name = doc.file_name.lower()
+    logging.info(f"[FILE] Received: {file_name}")
     
     if not file_name.endswith(('.txt', '.json', '.zip')):
         await message.answer("❌ Отправьте файл .txt, .json или .zip")
@@ -436,6 +455,7 @@ async def handle_document(message: types.Message):
         )
         
     except Exception as e:
+        logging.error(f"[FILE] Error: {e}")
         await msg.edit_text(f"❌ Ошибка обработки файла: {e}")
 
 # ==================== СТАТИСТИКА ====================
@@ -471,6 +491,7 @@ async def cb_scan_qr(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нет доступных аккаунтов", show_alert=True)
         return
     
+    logging.info(f"[QR] Scan requested by {callback.from_user.id}")
     await state.set_state(AuthState.waiting_for_qr)
     await callback.message.answer(
         "📷 Отправьте <b>фотографию QR-кода</b>.\n\n"
@@ -482,45 +503,62 @@ async def cb_scan_qr(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(AuthState.waiting_for_qr, F.photo)
 async def handle_qr_photo(message: types.Message, state: FSMContext):
     msg = await message.answer("⏳ Распознаю QR-код...")
+    logging.info(f"[QR] Photo received from {message.from_user.id}")
     
     try:
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
         file_bytes = await bot.download_file(file.file_path)
+        logging.info(f"[QR] Photo downloaded, size: {len(file_bytes.read())} bytes")
         
-        # Отправляем файл напрямую в Google QR API
         files = {'file': ('qr.png', file_bytes.read())}
         response = requests.post(
             'https://api.qrserver.com/v1/read-qr-code/',
             files=files
         )
         data = response.json()
+        logging.info(f"[QR] API response: {data}")
         
         if data and isinstance(data, list) and len(data) > 0:
             symbol = data[0].get("symbol", [])
             if symbol and len(symbol) > 0:
                 qr_data = symbol[0].get("data", "")
+                logging.info(f"[QR] Decoded data: {qr_data}")
                 if qr_data:
                     await process_qr(message, state, qr_data, msg)
                     return
         
+        logging.warning("[QR] No QR code found in photo")
         await msg.edit_text("❌ QR-код не найден на фото. Попробуйте другое фото.")
         
     except Exception as e:
+        logging.error(f"[QR] Error: {e}")
         await msg.edit_text(f"❌ Ошибка распознавания: {e}")
 
 async def process_qr(message: types.Message, state: FSMContext, qr_input: str, msg):
+    logging.info(f"[QR] Processing: {qr_input}")
     qr_link = qr_input
     track_id = None
     
+    # Пробуем разные форматы ссылок
     if "web.max.ru/link/" in qr_input:
         try:
             track_id = qr_input.split("/link/")[1].split("?")[0]
+            logging.info(f"[QR] Extracted track_id from web.max.ru: {track_id}")
+        except:
+            pass
+    elif "link/" in qr_input.lower():
+        try:
+            parts = qr_input.split("link/")
+            if len(parts) > 1:
+                track_id = parts[1].split("?")[0].split("/")[0]
+                logging.info(f"[QR] Extracted track_id from link: {track_id}")
         except:
             pass
     
     if not track_id:
-        await msg.edit_text("❌ Не удалось извлечь ID из QR. Отправьте корректный QR-код.")
+        logging.error(f"[QR] Failed to extract track_id from: {qr_input}")
+        await msg.edit_text(f"❌ Не удалось извлечь ID из QR.\n\nДанные QR: <code>{qr_input[:200]}</code>", parse_mode="HTML")
         return
     
     acc_ids = list(accounts.keys())
@@ -538,6 +576,7 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     save_accounts()
     
     await msg.edit_text(f"⏳ Сканирую QR через {acc['phone']}...")
+    logging.info(f"[QR] Using account: {acc['phone']}")
     
     scanner = QRScanner(acc["token"], acc["device_id"])
     
@@ -551,6 +590,8 @@ async def process_qr(message: types.Message, state: FSMContext, qr_input: str, m
     for _ in range(30):
         if result: break
         await asyncio.sleep(0.5)
+    
+    logging.info(f"[QR] Scan result: {result}")
     
     if result is None:
         await msg.edit_text("❌ Таймаут сканирования")
