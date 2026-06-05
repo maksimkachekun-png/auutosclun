@@ -20,8 +20,8 @@ from aiogram.types import InlineKeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = "ТОКЕН_БОТА_СКАНЕРА"
-ADMIN_ID = 123456789
+BOT_TOKEN = "8712834290:AAGv0YdVn9F4EDwlwQfeuyPoP9d26G3_CsU"
+ADMIN_ID = 8632861931
 ACCOUNTS_FILE = "scanner_accounts.json"
 
 bot = Bot(token=BOT_TOKEN)
@@ -285,7 +285,6 @@ def process_content(content: str) -> tuple:
     added = 0
     skipped = 0
     
-    # Пробуем как JSON массив или объект
     try:
         data = json.loads(content)
         
@@ -306,13 +305,11 @@ def process_content(content: str) -> tuple:
     except:
         pass
     
-    # Построчно
     for line in content.strip().split('\n'):
         line = line.strip()
         if not line:
             continue
         
-        # Пробуем как JSON
         try:
             data = json.loads(line)
             if isinstance(data, dict):
@@ -324,7 +321,6 @@ def process_content(content: str) -> tuple:
         except:
             pass
         
-        # Старый формат token|device_id|phone
         parts = line.split('|')
         token = parts[0].strip() if len(parts) > 0 else ""
         
@@ -367,7 +363,7 @@ async def start(message: types.Message):
     kb = admin_keyboard() if is_admin else main_keyboard()
     await message.answer(
         "🤖 <b>QR Scanner Bot</b>\n\n"
-        "Отправьте QR-ссылку и бот отсканирует её через свободный аккаунт.\n\n"
+        "Отправьте <b>фото QR-кода</b> или ссылку и бот отсканирует его через свободный аккаунт.\n\n"
         "<b>Для админа:</b> отправьте .txt, .json или .zip файл с токенами.",
         parse_mode="HTML",
         reply_markup=kb
@@ -462,16 +458,52 @@ async def cb_scan_qr(callback: types.CallbackQuery, state: FSMContext):
     
     await state.set_state(AuthState.waiting_for_qr)
     await callback.message.answer(
-        "📷 Отправьте QR-ссылку\n\n"
-        "Пример: <code>https://web.max.ru/link/...</code>",
+        "📷 Отправьте <b>фотографию QR-кода</b> или ссылку.\n\n"
+        "Бот распознает QR и отсканирует его.",
         parse_mode="HTML"
     )
     await callback.answer()
 
-@dp.message(AuthState.waiting_for_qr)
-async def handle_qr(message: types.Message, state: FSMContext):
-    qr_input = message.text.strip()
+@dp.message(AuthState.waiting_for_qr, F.photo)
+async def handle_qr_photo(message: types.Message, state: FSMContext):
+    """Обрабатывает фото с QR-кодом"""
+    msg = await message.answer("⏳ Распознаю QR-код...")
     
+    try:
+        from PIL import Image
+        from pyzbar.pyzbar import decode
+        
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        
+        image = Image.open(BytesIO(file_bytes.read()))
+        decoded = decode(image)
+        
+        if not decoded:
+            await msg.edit_text("❌ QR-код не найден на фото. Попробуйте ещё раз или отправьте ссылку текстом.")
+            return
+        
+        qr_data = decoded[0].data.decode('utf-8')
+        await process_qr(message, state, qr_data, msg)
+        
+    except ImportError:
+        await msg.edit_text(
+            "❌ Модуль распознавания QR не установлен.\n"
+            "Отправьте ссылку текстом: <code>https://web.max.ru/link/...</code>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка распознавания: {e}\n\nПопробуйте отправить ссылку текстом.")
+
+@dp.message(AuthState.waiting_for_qr, F.text)
+async def handle_qr_text(message: types.Message, state: FSMContext):
+    """Обрабатывает текстовую ссылку"""
+    msg = await message.answer("⏳ Обрабатываю ссылку...")
+    await process_qr(message, state, message.text.strip(), msg)
+
+async def process_qr(message: types.Message, state: FSMContext, qr_input: str, msg):
+    """Общая логика сканирования QR"""
     qr_link = qr_input
     track_id = None
     
@@ -482,25 +514,24 @@ async def handle_qr(message: types.Message, state: FSMContext):
             pass
     
     if not track_id:
-        await message.answer("❌ Не удалось извлечь ID из ссылки. Отправьте корректную QR-ссылку.")
+        await msg.edit_text("❌ Не удалось извлечь ID из QR. Отправьте корректный QR-код или ссылку.")
         return
     
     acc_ids = list(accounts.keys())
     if not acc_ids:
-        await message.answer("❌ Нет доступных аккаунтов")
+        await msg.edit_text("❌ Нет доступных аккаунтов")
         await state.clear()
         return
     
     acc_id = acc_ids[0]
     acc = accounts[acc_id]
     
-    # Round-robin
     acc_copy = dict(accounts[acc_id])
     del accounts[acc_id]
     accounts[acc_id] = acc_copy
     save_accounts()
     
-    msg = await message.answer(f"⏳ Сканирую QR через {acc['phone']}...")
+    await msg.edit_text(f"⏳ Сканирую QR через {acc['phone']}...")
     
     scanner = QRScanner(acc["token"], acc["device_id"])
     
